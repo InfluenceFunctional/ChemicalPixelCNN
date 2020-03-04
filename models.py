@@ -40,6 +40,7 @@ class MaskedPointwiseConv2d(nn.Conv2d):  # adds to regular masked conv2d by mask
         self.weight.data[:,0, 0, 0] *=0 # mask the entirety of the first filter (which will always be the input in a densenet)
         return super(MaskedPointwiseConv2d, self).forward(x)
 
+'''
 class GatedActivation():
     def __init__(selfself, *args, **kwargs):
 
@@ -53,7 +54,7 @@ class StackedConvolution(nn.Module):
         self.h_BN = nn.BatchNorm2d(f_in, f_out)
         self.h_Conv2d = nn.Conv2d(f_in, f_out, (1, 2), 1, padding, dilation, bias=True, padding_mode='zeros')
         self.h_to_h = nn.Conv2d(f_in, f_out, 1)
-
+'''
 
 class PixelCNN(nn.Module):
     def __init__(self, filters, filter_size, layers, out_maps, padded):
