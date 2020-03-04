@@ -56,7 +56,7 @@ class build_dataset(Dataset):
         elif training_data == 10:
             self.samples = np.load('data/MAC/graphene.npy',allow_pickle=True)
 
-        self.samples = np.array((self.samples[0:10000] + 1)/(out_maps - 1)) # normalize inputs on 0,1,2...
+        self.samples = np.array((self.samples + 1)/(out_maps - 1)) # normalize inputs on 0,1,2...
 
     def __len__(self):
         return len(self.samples)
