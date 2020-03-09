@@ -98,13 +98,13 @@ class PixelCNN_RES(nn.Module):
         self.output_convolution = nn.Conv2d(2 * filters, out_maps, 1)
 
     def forward(self, x): # pre-activated residual model
-        x = F.leaky_relu(self.initial_convolution(self.initial_batch_norm(x)))
+        x = F.relu(self.initial_convolution(self.initial_batch_norm(x)))
 
         for i in range(len(self.hidden_convolutions)):
             residue = x
-            x = self.shrink_features[i](F.leaky_relu(self.batch_norms_1[i](x)))
-            x = self.hidden_convolutions[i](F.leaky_relu(self.batch_norms_2[i](x)))
-            x = self.grow_features[i](F.leaky_relu(self.batch_norms_3[i](x)))
+            x = self.shrink_features[i](F.relu(self.batch_norms_1[i](x)))
+            x = self.hidden_convolutions[i](F.relu(self.batch_norms_2[i](x)))
+            x = self.grow_features[i](F.relu(self.batch_norms_3[i](x)))
             x += residue
 
         x = self.output_convolution(x)
@@ -130,13 +130,13 @@ class PixelCNN_RES_OUT(nn.Module):
         self.output_convolution = nn.Conv2d(2 * filters, out_maps, 1)
 
     def forward(self, x): # pre-activated residual model
-        x = F.leaky_relu(self.initial_convolution(self.initial_batch_norm(x)))
+        x = F.relu(self.initial_convolution(self.initial_batch_norm(x)))
 
         for i in range(len(self.hidden_convolutions)):
             residue = x
-            x = self.shrink_features[i](F.leaky_relu(self.batch_norms_1[i](x)))
-            x = self.hidden_convolutions[i](F.leaky_relu(self.batch_norms_2[i](x)))
-            x = self.grow_features[i](F.leaky_relu(self.batch_norms_3[i](x)))
+            x = self.shrink_features[i](F.relu(self.batch_norms_1[i](x)))
+            x = self.hidden_convolutions[i](F.relu(self.batch_norms_2[i](x)))
+            x = self.grow_features[i](F.relu(self.batch_norms_3[i](x)))
             x += residue[:,:,1:-1,1:-1] #contract input
 
         x = self.output_convolution(x)
@@ -266,7 +266,7 @@ class DensePixelDCNN(nn.Module):  # (ungated) Dense PixelCNN with dilated (soon)
 
         for i in range(2,len(self.convolution)+2): # dense layers in a block
 
-            #self.residues.append(self.convolution[i - 2](F.leaky_relu(self.batch_norm[i - 2](torch.cat([self.residues[j][:,:,int(self.cumulative_unpad[i-1,j]):self.residues[j].shape[-2]-int(self.cumulative_unpad[i-1,j]), int(self.cumulative_unpad[i-1,j]):self.residues[j].shape[-1]-int(self.cumulative_unpad[i-1,j])] for j in range(len(self.residues))], 1)))))
+            #self.residues.append(self.convolution[i - 2](F.relu(self.batch_norm[i - 2](torch.cat([self.residues[j][:,:,int(self.cumulative_unpad[i-1,j]):self.residues[j].shape[-2]-int(self.cumulative_unpad[i-1,j]), int(self.cumulative_unpad[i-1,j]):self.residues[j].shape[-1]-int(self.cumulative_unpad[i-1,j])] for j in range(len(self.residues))], 1)))))
             self.residues.append(self.convolution[i - 2](F.relu(self.batch_norm[i - 2](F.relu(self.pointwise[i - 2](self.batch_norm2[i - 2](torch.cat([self.residues[j][:,:,int(self.cumulative_unpad[i-1,j]):self.residues[j].shape[-2]-int(self.cumulative_unpad[i-1,j]), int(self.cumulative_unpad[i-1,j]):self.residues[j].shape[-1]-int(self.cumulative_unpad[i-1,j])] for j in range(len(self.residues))], 1))))))))
 
 
