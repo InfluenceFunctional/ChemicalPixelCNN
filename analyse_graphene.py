@@ -49,12 +49,12 @@ fourier_bins, radial_fourier = radial_fourier_analysis(transform)
 radial_density, pair_correlation, correlation_bin = spatial_correlation(np.expand_dims(np.expand_dims(image,0),0))
 '''
 #supersample
-image = sample_augment(image, 100, 100, 0, 0, 1, 500000).astype('uint8')
+image = sample_augment(image, 100, 100, 0, 0, 1, 500000).astype('uint8') # size of sample
 image = np.expand_dims(image, 1)
 
 # add a little jitter
 for n in tqdm.tqdm(range(len(image))):
-    rands = np.random.randint(0, 5, size=600) < 1
+    rands = np.random.randint(0, 5, size=600) < 1 # set larger element of range to determine how noisey data will be (higher is less noise)
     rand = -1
 
     for i in range(1, image.shape[-2] - 1):
