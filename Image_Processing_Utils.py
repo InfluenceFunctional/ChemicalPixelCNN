@@ -8,22 +8,25 @@ def scramble_images(images, noise, den_var, GPU): # noise parameter from 0 to 1,
     if GPU == 1:
         images = images.cpu()
     images = images.float()
-    delta = 10
-    slices = np.ceil(images.shape[0]/delta).astype('uint8')
+    delta = 1
+    slices = np.ceil(images.shape[0]/delta)
     noise_rands = np.arange(slices - 1) / (slices - 1) * noise
     np.random.shuffle(noise_rands)
 
-    for i in range(slices - 1): # -1 to account for remainder, which will go unmodified
+    for i in range(int(slices) - 1): # -1 to account for remainder, which will go unmodified
         images_subset = images[i*delta:(i+1)*delta, :, :, :]
+        possible_values = np.unique(images_subset)
         n_samples = int(images_subset.shape[0] * images_subset.shape[2] * images_subset.shape[3] * noise_rands[i]) # number of pixels we have to sample
 
-        image_mean = torch.mean((images_subset.float()+1) / 2) # pre-existing mean
+        #image_mean = torch.mean((images_subset.float()+1) / 2) # pre-existing mean
 
-        den_var_randns = torch.normal(mean = torch.ones(n_samples) * image_mean, std = torch.ones(n_samples) * den_var)  # degree of density variation in the noise
+        #den_var_randns = torch.normal(mean = torch.ones(n_samples) * image_mean, std = torch.ones(n_samples) * den_var)  # degree of density variation in the noise
         rand_ind, rand_y, rand_x = [torch.randint(0, images_subset.shape[0], size = (n_samples,)), torch.randint(0,images_subset.shape[2], size = (n_samples,)), torch.randint(0,images_subset.shape[3], size = (n_samples,))]
-        sample_rand = (torch.rand(n_samples) < den_var_randns).int()
+        #sample_rand = (torch.rand(n_samples) < den_var_randns).int()
+        sample_rand = torch.Tensor(np.random.randint(1,len(possible_values)+1, size=n_samples)).float()
 
-        images_subset[rand_ind, 0, rand_y, rand_x] = (sample_rand - .5) * 2
+        #images_subset[rand_ind, 0, rand_y, rand_x] = (sample_rand - .5) * 2
+        images_subset[rand_ind, 0, rand_y, rand_x] = sample_rand / len(possible_values)
         images[i*delta:(i+1)*delta, :, :, :] = images_subset
 
     if GPU ==1:

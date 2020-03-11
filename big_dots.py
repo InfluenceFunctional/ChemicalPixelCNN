@@ -5,7 +5,7 @@ from skimage.draw import line_aa, line
 
 # import npy structures
 #images = np.load('data/MAC/big_MAC.npy', allow_pickle=True)
-images = np.load('data/MAC/noisey_graphene.npy', allow_pickle=True)
+images = np.load('data/MAC/noisey_graphene2.npy', allow_pickle=True)
 images = images[:,0,:,:]
 #images = np.load('sample1.npy',allow_pickle=True)
 #images = np.load('trial_run.npy',allow_pickle=True)
@@ -21,4 +21,4 @@ for n in tqdm.tqdm(range(images.shape[0])):
 
 out_image += images
 out_image = out_image.astype('uint8')
-np.save('data/MAC/big_dot_graphene', np.expand_dims(out_image,1))
+np.save('data/MAC/big_dot_graphene2', np.expand_dims(out_image,1))

@@ -54,9 +54,11 @@ class build_dataset(Dataset):
         elif training_data == 9:
             self.samples = np.load('data/MAC/big_MAC.npy',allow_pickle=True)
         elif training_data == 10:
-            self.samples = np.load('data/MAC/graphene.npy',allow_pickle=True)
+            self.samples = np.load('data/MAC/big_dot_graphene2.npy',allow_pickle=True)
+        elif training_data == 11:
+            self.samples = np.load('data/color_test3.npy',allow_pickle=True)
 
-        self.samples = np.array((self.samples + 1)/(out_maps - 1)) # normalize inputs on 0,1,2...
+        self.samples = np.array((self.samples[0:5000] + 1)/(out_maps - 1)) # normalize inputs on 0,1,2...
 
     def __len__(self):
         return len(self.samples)
@@ -72,12 +74,12 @@ def get_dir_name(model, training_data, filters, layers, dilation, grow_filters, 
 
     return dir_name
 
-def get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, den_var):
+def get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var):
     if model == 1:
         net = PixelCNN(filters, filter_size, layers, out_maps, 1)  # 1 means convolutions will be padded
         conv_field = (filter_size - 1) * layers // 2  # range of convolutional receptive field for given model - for PixelCNN
     elif model == 2:
-        net = PixelCNN_RES(filters, filter_size, layers, out_maps, 1)
+        net = PixelCNN_RES(filters, filter_size, layers, out_maps, channels, 1)
         conv_field = layers + (filter_size - 1) // 2  # for PixelCNN_RES
     elif model == 3:
         net = PixelDRN(filters, filter_size, dilation, layers, out_maps, grow_filters, 1)
@@ -85,11 +87,14 @@ def get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilat
     elif model == 4:
         net = DensePixelDCNN(filters,filter_size,dilation,layers,out_maps, den_var == 0)
         conv_field = layers + (filter_size - 1) // 2
+    elif model == 5:
+        net = PixelCNN2(filters,filter_size,dilation,layers,out_maps, den_var == 0) # gated, without blind spot
+        conv_field = int(np.sum(net.dilation[1:])) * layers + (filter_size - 1) // 2
 
     def init_weights(m):
         if (type(m) == nn.Conv2d) or (type(m) == MaskedConv2d):
             #torch.nn.init.xavier_uniform_(m.weight)
-            torch.nn.init.kaiming_uniform_(m.weight)
+            torch.nn.init.kaiming_uniform_(m.weight, nonlinearity = 'relu')
 
     net.apply(init_weights) # apply xavier weights to 1x1 and 3x3 convolutions
 
@@ -109,10 +114,11 @@ def get_dataloaders(training_data, training_batch, out_maps):
 
 
 def initialize_training(model, filters, filter_size, layers, out_maps, grow_filters, dilation, den_var, training_data, outpaint_ratio):
-    net, conv_field = get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, den_var)
-    optimizer = optim.Adam(net.parameters()) #optim.SGD(net.parameters(),lr=1e-4, momentum=0.9, nesterov=True)#
     tr, te = get_dataloaders(training_data, 4, out_maps)
     sample_0 = next(iter(tr))
+    channels = sample_0.shape[1]
+    net, conv_field = get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var)
+    optimizer = optim.Adam(net.parameters()) #optim.SGD(net.parameters(),lr=1e-4, momentum=0.9, nesterov=True)#
     input_x_dim, input_y_dim = sample_0.shape[-1], sample_0.shape[-2]  # set input and output dimensions
     sample_x_dim, sample_y_dim = int(input_x_dim * outpaint_ratio), int(input_y_dim * outpaint_ratio)
 
@@ -146,10 +152,10 @@ def load_checkpoint(net, optimizer, dir_name, GPU, prev_epoch):
     return net, optimizer, prev_epoch
 
 
-def get_training_batch_size(training_data, training_batch, model, filters, filter_size, layers, out_maps, grow_filters, dilation, den_var, GPU):
-    net, conv_field = get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, den_var)
+def get_training_batch_size(training_data, training_batch, model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var, GPU):
+    net, conv_field = get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var)
     if GPU == 1:
-        net = nn.DataParallel(net)
+        #net = nn.DataParallel(net)
         net.to(torch.device("cuda:0"))
 
     optimizer =  optim.Adam(net.parameters())
@@ -165,13 +171,16 @@ def get_training_batch_size(training_data, training_batch, model, filters, filte
             if GPU == 1:
                 input = input.cuda()
 
-            target = input.data[:, 0] * (out_maps - 1)  # switch from training to output space
+            target = input.data * (out_maps - 1)  # switch from training to output space
+            channels = target.shape[-3]
 
             noise = 0
             if den_var != 0:
                 input = random_padding(input, noise, den_var, conv_field, GPU)
+            output = net(input.float())  # reshape output from flat filters to channels * filters per channel
+            output = torch.reshape(output, (output.shape[0], out_maps, channels, output.shape[-2], output.shape[-1]))
 
-            loss = F.cross_entropy(net(input.float()), target.long())
+            loss = F.cross_entropy(output, target.long())
             optimizer.zero_grad()  # reset gradients from previous passes
             loss.backward()  # back-propagation
             optimizer.step()  # update parameters
@@ -193,15 +202,18 @@ def train_net(net, optimizer, writer, tr, epoch, out_maps, noise, den_var, conv_
         if GPU == 1:
             input = input.cuda(non_blocking=True)
 
-        target = input.data[:, 0] * (out_maps - 1)  # switch from training to output space
-
+        target = input.data * (out_maps - 1)  # switch from training to output space
+        channels = target.shape[-3]
         #if noise != 0:
-            #input = scramble_images(input, noise, den_var, GPU)
+        input = scramble_images(input, 0.25, 1, GPU) # introduce uniform noise to training samples (second term controls magnitude)
 
         if den_var !=0:
             input = random_padding(input, noise, den_var, conv_field, GPU)
 
-        loss = F.cross_entropy(net(input.float()), target.long())  # compute the loss between the network output, and our target
+        output = net(input.float()) # reshape output from flat filters to channels * filters per channel
+        output = torch.reshape(output, (output.shape[0], out_maps, channels, output.shape[-2], output.shape[-1]))
+
+        loss = F.cross_entropy(output, target.long())  # compute the loss between the network output, and our target
         err_tr.append(loss.data)  # record loss
         optimizer.zero_grad()  # reset gradients from previous passes
         loss.backward()  # back-propagation
@@ -229,15 +241,18 @@ def test_net(net, writer, te, out_maps, noise, den_var, epoch, conv_field, GPU, 
             if GPU == 1:
                 input = input.cuda()
 
-            target = input.data[:, 0] * (out_maps - 1)  # switch from training to output space
+            target = input.data * (out_maps - 1)  # switch from training to output space
+            channels = target.shape[-3]
 
             #if noise != 0:
-            #    input = scramble_images(input, noise, den_var, GPU)
+            input = scramble_images(input, 0.25, 1, GPU) #NOT SETUP FOR MULTI-CHANNEL
 
             if den_var != 0:
                 input = random_padding(input, noise, den_var, conv_field, GPU)
+            output = net(input.float())  # reshape output from flat filters to channels * filters per channel
+            output = torch.reshape(output, (output.shape[0], out_maps, channels, output.shape[-2], output.shape[-1]))
 
-            loss = F.cross_entropy(net(input.float()), target.long())
+            loss = F.cross_entropy(output, target.long())  # c
             err_te.append(loss.data)
 
             if i % 10 == 0:  # log loss to tensorboard
@@ -253,7 +268,7 @@ def auto_convergence(average_over, epoch, prev_epoch, net, optimizer, dir_name, 
     # set convergence criteria
     # if the test error has increased on average for the last x epochs
     # or if the training error has decreased by less than 1% for the last x epochs
-    train_margin = 0.0001  # relative change over past x runs
+    train_margin = .00001  # relative change over past x runs
     # or if the training error is diverging from the test error by more than 20%
     test_margin = 10# 0.1
     # average_over - the time over which we will average loss in order to determine convergence
@@ -281,18 +296,20 @@ def auto_convergence(average_over, epoch, prev_epoch, net, optimizer, dir_name, 
     return converged
 
 
-def get_generator(model, filters, filter_size, dilation, layers, out_maps, grow_filters, padding, GPU, net):
+def get_generator(model, filters, filter_size, dilation, layers, out_maps, grow_filters, channels, padding, GPU, net):
     if model == 1:
-        generator = PixelCNN(filters, filter_size, layers, out_maps, padding)  # 0 means no padding
+        generator = PixelCNN(filters, filter_size, layers, out_maps, channels, padding)  # 0 means no padding
     elif model == 2:
-        generator = PixelCNN_RES_OUT(filters, filter_size, layers, out_maps, padding)
+        generator = PixelCNN_RES_OUT(filters, filter_size, layers, out_maps, channels, padding)
     elif model == 3:
         generator = PixelDRN(filters, filter_size, dilation, layers, out_maps, grow_filters, padding)
     elif model == 4:
         generator = DensePixelDCNN(filters, filter_size, dilation, layers, out_maps, padding)
+    elif model == 5:
+        generator = PixelCNN2(filters,filter_size,dilation,layers, out_maps, padding) # gated, without blind spot
 
     if GPU == 1:
-        generator = nn.DataParallel(generator)
+        #generator = nn.DataParallel(generator)
         generator.to(torch.device("cuda:0"))
 
     generator.load_state_dict(net.state_dict())
@@ -300,7 +317,7 @@ def get_generator(model, filters, filter_size, dilation, layers, out_maps, grow_
     return generator
 
 
-def build_boundary(sample_batch, sample_batch_size, training_data, conv_field, generator, bound_type, out_maps, noise_mean, den_var, GPU): # 0 = empty, 1 = seed in top left only, 2 = seed + random noise with appropriate density, 3 = seed + generated
+def build_boundary(sample_batch, sample_batch_size, training_data, conv_field, generator, bound_type, out_maps, noise, den_var, GPU): # 0 = empty, 1 = seed in top left only, 2 = seed + random noise with appropriate density, 3 = seed + generated
 
     if bound_type > 0:  # requires samples are at least as large as the convolutional receptive field, and
         tr, te = get_dataloaders(training_data, int(sample_batch_size/.2), out_maps) # requires a sufficiently large training set or we won't saturate the seeds
@@ -310,9 +327,9 @@ def build_boundary(sample_batch, sample_batch_size, training_data, conv_field, g
             sample_batch[:, :, 0:conv_field, 0:seeds.shape[3]] = seeds[0:sample_batch_size, :, 0:conv_field, 0:np.amin((seeds.shape[3], sample_batch.shape[3]))]  # seed from the top-left
             sample_batch[:, :, 0:seeds.shape[2], 0:conv_field] = seeds[0:sample_batch_size, :, 0:np.amin((seeds.shape[2], sample_batch.shape[2])), 0:conv_field]  # seed from the top-left
 
-        elif bound_type == 4: # a bunch of seeds around the top and sides of the sample #DEPRECATED
-            sample_batch[:, :, 0:conv_field, 0:seeds.shape[3]] = seeds[0:sample_batch_size, :, 0:conv_field, 0:seeds.shape[3]]  # seed from the top-left
-            sample_batch[:, :, 0:seeds.shape[2], 0:conv_field] = seeds[0:sample_batch_size, :, 0:seeds.shape[2], 0:conv_field]  #
+        elif bound_type == 4: # a bunch of seeds around the top and sides of the sample
+            sample_batch[:, :, 0:conv_field, 0:seeds.shape[3]] = seeds[0:sample_batch_size, :, 0:conv_field, 0:np.amin((seeds.shape[3], sample_batch.shape[3]))]  # seed from the top-left
+            sample_batch[:, :, 0:seeds.shape[2], 0:conv_field] = seeds[0:sample_batch_size, :, 0:np.amin((seeds.shape[2], sample_batch.shape[2])), 0:conv_field]  #
             for i in range(sample_batch.shape[3]//seeds.shape[3] - 1): # seed the top row
                 sample_batch[:, :, 0:conv_field, i*seeds.shape[3]:(i+1)*seeds.shape[3]] = seeds[torch.randint(0, seeds.shape[0], (sample_batch_size,)), :, 0:conv_field, 0:seeds.shape[3]]
 
@@ -329,7 +346,7 @@ def build_boundary(sample_batch, sample_batch_size, training_data, conv_field, g
         #sample_batch[:, :, seeds.shape[2]:, 0:conv_field] = noise2
         #density = torch.mean(seeds.type(torch.DoubleTensor))
         #sample_batch = torch.Tensor(np.random.choice((0,1), size = (sample_batch_size, 1, sample_batch.shape[2], sample_batch.shape[3]), p = (1 - density, density)))
-        sample_batch = torch.Tensor(np.random.normal(noise_mean, den_var, size =(sample_batch_size, 1, sample_batch.shape[2], sample_batch.shape[3])))
+        sample_batch = torch.Tensor(np.random.normal(noise, den_var, size =(sample_batch_size, 1, sample_batch.shape[2], sample_batch.shape[3])))
 
     elif bound_type == 3: # fill unseeded boundary using the network #DEPRECATED
         bound1 = sample_batch[:, :, 0:conv_field, 0:] # take horizontal and vertical blocks
@@ -369,25 +386,25 @@ def build_boundary(sample_batch, sample_batch_size, training_data, conv_field, g
 
     return sample_batch
 
-def get_sample_batch_size(sample_batch_size, generator, sample_x_dim, sample_y_dim, conv_field, GPU):
+def get_sample_batch_size(sample_batch_size, generator, sample_x_dim, sample_y_dim, conv_field, channels, GPU):
     # dynamically set sample batch size
     finished = 0
     sample_batch_size_0 = 1 * sample_batch_size
     #  test various batch sizes to see what we can store in memory
     while (sample_batch_size > 1) & (finished == 0):
         try:
-            input = torch.Tensor(sample_batch_size, 1, sample_y_dim + 2 * conv_field, sample_x_dim + 2 * conv_field)
+            input = torch.Tensor(sample_batch_size, channels, sample_y_dim + 2 * conv_field, sample_x_dim + 2 * conv_field)
             if GPU == 1:
                 input = input.cuda()
 
-            test_out = generator(input[:, :, conv_field - conv_field:conv_field + conv_field + 1, conv_field - conv_field:conv_field + conv_field + 1].float())
+            test_out = generator(input[:, :, conv_field - conv_field:conv_field + conv_field + 1, conv_field - conv_field:conv_field + conv_field + 1].float()) #attempt on channel 0
             finished = 1
         except RuntimeError:  # if we get an OOM, try again with smaller batch
             sample_batch_size = sample_batch_size // 2
 
     return sample_batch_size, int(sample_batch_size != sample_batch_size_0)
 
-def generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, conv_field, generator, bound_type, GPU, cuda, training_data, out_maps, boundary_layers, noise_mean, den_var):
+def generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, conv_field, generator, bound_type, GPU, cuda, training_data, out_maps, boundary_layers, noise, den_var, channels, temperature):
     if GPU == 1:
         cuda.synchronize()
     time_ge = time.time()
@@ -395,7 +412,7 @@ def generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, c
     sample_x_padded = sample_x_dim + 2 * conv_field * boundary_layers
     sample_y_padded = sample_y_dim + conv_field * boundary_layers  # don't need to pad the bottom
 
-    sample_batch_size, changed = get_sample_batch_size(sample_batch_size, generator, sample_x_padded, sample_y_padded, conv_field, GPU) # add extra padding by conv_field in both x-directions, and in the + y direction, which we will remove later
+    sample_batch_size, changed = get_sample_batch_size(sample_batch_size, generator, sample_x_padded, sample_y_padded, conv_field, channels, GPU) # add extra padding by conv_field in both x-directions, and in the + y direction, which we will remove later
     if changed:
         print('Sample batch size changed to {}'.format(sample_batch_size))
 
@@ -404,31 +421,35 @@ def generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, c
 
     batches = int(np.ceil(n_samples/sample_batch_size))
     n_samples = sample_batch_size * batches
-    sample = torch.ByteTensor(n_samples, 1, sample_y_dim, sample_x_dim)  # sample placeholder
+    sample = torch.ByteTensor(n_samples, channels, sample_y_dim, sample_x_dim)  # sample placeholder
     print('Generating {} Samples'.format(n_samples))
 
     for batch in range(batches):  # can't do these all at once so we do it in batches
         print('Batch {} of {} batches'.format(batch + 1, batches))
-        sample_batch = torch.FloatTensor(sample_batch_size, 1, sample_y_padded + 2 * conv_field, sample_x_padded + 2 * conv_field)  # needs to be explicitly padded by the convolutional field
+        sample_batch = torch.FloatTensor(sample_batch_size, channels, sample_y_padded + 2 * conv_field, sample_x_padded + 2 * conv_field)  # needs to be explicitly padded by the convolutional fieldn
         sample_batch.fill_(0)  # initialize with minimum value
 
         if bound_type > 0:
-            sample_batch = build_boundary(sample_batch, sample_batch_size, training_data, conv_field, generator, bound_type, out_maps, noise_mean, den_var, GPU)
+            sample_batch = build_boundary(sample_batch, sample_batch_size, training_data, conv_field, generator, bound_type, out_maps, noise, den_var, GPU)
 
         if GPU == 1:
             sample_batch = sample_batch.cuda()
 
         generator.train(False)
         with torch.no_grad():  # we will not be updating weights
-            for i in tqdm.tqdm(range(conv_field, sample_y_padded + conv_field)):  # for each pixel
-                for j in range(conv_field, sample_x_padded + conv_field):
-                    out = generator(sample_batch[:, :, i - conv_field:i + conv_field + 1, j - conv_field:j + conv_field + 1].float())  # query the network about only area within the receptive field
-                    probs = F.softmax(out[:, 1:, 0, 0], dim=1).data # the remove the lowest element (boundary)
-                    sample_batch[:, :, i, j] = (torch.multinomial(probs, 1).float() + 1) / (out_maps -1)  # convert output back to training space
+                for i in tqdm.tqdm(range(conv_field, sample_y_padded + conv_field)):  # for each pixel
+                    for j in range(conv_field, sample_x_padded + conv_field):
+                        for k in range(channels):
+                            out = generator(sample_batch[:, :, i - conv_field:i + conv_field + 1, j - conv_field:j + conv_field + 1].float())  # query the network about only area within the receptive field
+                            out = torch.reshape(out, (out.shape[0], out_maps, channels, out.shape[-2], out.shape[-1])) # reshape to select channels
+                            normed_temp = torch.mean(torch.abs(out[:, 1:, k, 0, 0])) * (temperature)# + np.exp(- i/conv_field)) # normalize temperature, graded against the boundary
 
-        del out, probs
+                            probs = F.softmax(out[:, 1:, k, 0, 0]/normed_temp, dim=1).data # the remove the lowest element (boundary)
+                            sample_batch[:, k, i, j] = (torch.multinomial(probs, 1).float() + 1).squeeze(1) / (out_maps -1)  # convert output back to training space
+                            del out, probs
 
-        sample[batch * sample_batch_size:(batch + 1) * sample_batch_size, :, :, :] = sample_batch[:, :, (boundary_layers + 1) * conv_field:-conv_field, (boundary_layers + 1) * conv_field:-((boundary_layers + 1) * conv_field)]  * (out_maps - 1) - 1 # convert back to input space
+        for k in range(channels):
+            sample[batch * sample_batch_size:(batch + 1) * sample_batch_size, k, :, :] = sample_batch[:, k, (boundary_layers + 1) * conv_field:-conv_field, (boundary_layers + 1) * conv_field:-((boundary_layers + 1) * conv_field)] * (out_maps - 1) - 1  # convert back to input space
 
     if GPU == 1:
         cuda.synchronize()
@@ -437,7 +458,7 @@ def generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, c
     return sample, time_ge, sample_batch_size, n_samples
 
 def analyse_inputs(training_data, out_maps, GPU):
-    dataset = torch.Tensor(build_dataset(training_data, out_maps))  # get data
+    dataset = torch.Tensor(build_dataset(training_data, out_maps))[:,0,:,:].unsqueeze(1)  # get data
     dataset = dataset * (out_maps - 1) - 1
     #avg_density, en_dist, correlation2d, radial_correlation, fourier2d, radial_fourier, sum, variance,  = sample_analysis(dataset)
     input_analysis = analyse_samples(dataset, training_data)
@@ -446,7 +467,8 @@ def analyse_inputs(training_data, out_maps, GPU):
 
 def analyse_samples(sample, training_data):
     # considering the highest value in the dist to be that for particles
-    particles = torch.max(sample)
+    sample = sample[:,0,:,:].unsqueeze(1) # for now only analyze the first dimension
+    particles = 1
     avg_density = torch.mean((sample==particles).type(torch.float32)) # for A
     sum = torch.sum(sample[:,0,:,:]==particles,0)
     variance = torch.var(sum/torch.mean(sum + 1e-5))
@@ -454,7 +476,7 @@ def analyse_samples(sample, training_data):
     fourier2d = fourier_analysis(torch.Tensor((sample==particles).float()))
     fourier_bins, radial_fourier = radial_fourier_analysis(fourier2d)
 
-    if training_data == 9:
+    if (training_data == 10 or training_data == 9):
         avg_bond_order, bond_order_dist, avg_bond_length, avg_bond_angle, bond_length_dist, bond_angle_dist = bond_analysis(sample, 1.7, particles)
     else:
         avg_interactions, en_dist = compute_interactions(sample == particles)
@@ -469,7 +491,7 @@ def analyse_samples(sample, training_data):
     sample_analysis['fourier2d'] = fourier2d
     sample_analysis['radial fourier'] = radial_fourier
     sample_analysis['fourier bins'] = fourier_bins
-    if training_data == 9:
+    if (training_data == 10 or training_data == 9):
         sample_analysis['average bond order'] = avg_bond_order
         sample_analysis['bond order dist'] = bond_order_dist
         sample_analysis['average bond length'] = avg_bond_length
@@ -509,7 +531,7 @@ def compute_accuracy(input_analysis, output_analysis, outpaint_ratio, training_d
     agreements['fourier'] = np.amax((1 - np.sum(np.abs(input_analysis['fourier2d'] - output_analysis['fourier2d'])) / (np.sum(input_analysis['fourier2d']) + 1e-8),0))
     agreements['correlation'] = np.amax((1 - np.sum(np.abs(input_analysis['correlation2d'] - output_analysis['correlation2d'])) / (np.sum(input_analysis['correlation2d']) + 1e-8),0))
 
-    if training_data == 9:
+    if (training_data == 10 or training_data == 9):
         agreements['order'] = np.amax((1 - np.average(np.abs(input_analysis['bond order dist'][0] - output_analysis['bond order dist'][0])) / np.average(input_analysis['bond order dist'][0]), 0))
         agreements['bond'] = np.amax((1 - np.average(np.abs(input_analysis['bond length dist'][0] - output_analysis['bond length dist'][0])) / np.average(input_analysis['bond length dist'][0]), 0))
         agreements['angle'] = np.amax((1 - np.average(np.abs(input_analysis['bond angle dist'][0] - output_analysis['bond angle dist'][0])) / np.average(input_analysis['bond angle dist'][0]), 0))

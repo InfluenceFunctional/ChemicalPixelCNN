@@ -8,25 +8,26 @@ run = get_input()
 ## parameters
 if run == -1:  # user-defined parameters
     # architecture
-    model = 4 # 1 is PixelCNN without residuals, 2 is PixelCNN with pre-activated residual bottlenecks, 3 is PixelDRN, 4 - DensePixelCNN
-    filters = 6 # number of convolutional filters or feature maps (at initial layer for model ==3)
-    out_maps = 3 # number of output logits - must equal number of possible outputs, i.e. 1 and 0
+    model = 2 # 1 is PixelCNN without residuals, 2 is PixelCNN with pre-activated residual bottlenecks, 3 is PixelDRN, 4 - DensePixelCNN
+    filters = 64 # number of convolutional filters or feature maps (at initial layer for model ==3)
+    out_maps = 66 # number of output logits - must equal number of possible outputs, i.e. 1 and 0
     filter_size = 7  # initial layer convolution size
     dilation = 1  # dilation scale - see model
     layers = 10 # number of hidden convolutional layers in models 1 & 2, number of layers per block (6 blocks + stem) in model 3
-    bound_type = 0  # type of boundary layer, 0 = empty, 1 = seed in top left only, 2 = seed + random noise with appropriate density, 3 = seed + generated, 4 = multiple seeds
+    bound_type = 1  # type of boundary layer, 0 = empty, 1 = seed in top left only, 2 = seed + random noise with appropriate density, 3 = seed + generated, 4 = multiple seeds
     boundary_layers = 0 # number of layers of conv_fields between sample and boundary
     grow_filters = 0  # 0 - f_maps constant throughout network, 1 - f_maps will increase deeper in the network only for model 3
+    softmax_temperature = .1 # ratio to batch mean at which softmax will sample
 
     # training
-    training_data = 8 # select training set: 1 - repulsive, 2 - annealed, 3 - 64x64 finite T, 4 - single brane, 5- refined branes, 6 - synthetic drying, age =1, 7 - synthetic drying, age = -1, 8- small sample synthetic drying age = -1, 9-MAC test image, 10 - graphene
-    training_batch = 1024 * (2 ** 1) # size of training and test batches - it will try to run at this size, bu5t if it doesn't fit it will go smaller
-    sample_batch_size = 16 # batch size for sample generator - will auto-adjust to be sm/eq than training_batch
+    training_data = 11 # select training set: 1 - repulsive, 2 - annealed, 3 - 64x64 finite T, 4 - single brane, 5- refined branes, 6 - synthetic drying, age =1, 7 - synthetic drying, age = -1, 8- small sample synthetic drying age = -1, 9-MAC test image, 10 - graphene
+    training_batch = 256 * (2 ** 1) # siz`e of training and test batches - it will try to run at this size, bu5t if it doesn't fit it will go smaller
+    sample_batch_size = 6 # batch size for sample generator - will auto-adjust to be sm/eq than training_batch
     n_samples = sample_batch_size  # total samples to be generated when we generate, must not be zero (it may make more if there is available memory)
-    run_epochs = 1000 # number of incremental epochs which will be trained over - if zero, will run just the generator
+    run_epochs = 0 # number of incremental epochs which will be trained over - if zero, will run just the generator
     outpaint_ratio = 1 # sqrt of size of output relative to input
     noise = 0 # mean of border noise
-    den_var = 1 # standard deviation of density variation, also toggle 0 to turn off boundary noise (dense only)
+    den_var = 0 # standard deviation of density variation, also toggle 0 to turn off boundary noise (dense only)
     GPU = 1  # if 1, runs on GPU (requires CUDA), if 0, runs on CPU (slow!)
     TB = 0  # if 1, save everything to tensorboard as well as to file, if 0, just save outputs to file
 else:
@@ -42,6 +43,7 @@ else:
     bound_type = inputs['bound_type'][run]
     boundary_layers = inputs['boundary_layers'][run]
     grow_filters = inputs['grow_filters'][run]
+    softmax_temperature = inputs['softmax_temperature'][run]
 
     # training
     training_data = inputs['training_data'][run]
@@ -65,6 +67,7 @@ prev_epoch = 0
 if __name__ == '__main__':  # run it!
     net, conv_field, optimizer, sample_0, input_x_dim, input_y_dim, sample_x_dim, sample_y_dim = initialize_training(model, filters, filter_size, layers, out_maps, grow_filters, dilation, den_var, training_data, outpaint_ratio)
     net, optimizer, prev_epoch = load_checkpoint(net, optimizer, dir_name, GPU, prev_epoch)
+    channels = sample_0.shape[1]
 
     #density, en_dist, correlation2d, radial_correlation, fourier2d, radial_fourier, sum, variance = analyse_inputs(training_data, out_maps, GPU)
     input_analysis = analyse_inputs(training_data, out_maps, GPU)
@@ -75,10 +78,10 @@ if __name__ == '__main__':  # run it!
     print('Imported and Analyzed Training Dataset {}'.format(training_data))
 
     if GPU == 1:
-        net = nn.DataParallel(net)
-        print("Using", torch.cuda.device_count(), "GPUs")
+        #net = nn.DataParallel(net)
+        #print("Using", torch.cuda.device_count(), "GPUs")
         net.to(torch.device("cuda:0"))
-        print(summary(net, (1, input_x_dim, input_y_dim)))  # doesn't work on CPU, not sure why
+        print(summary(net, (channels, input_x_dim, input_y_dim)))  # doesn't work on CPU, not sure why
 
     max_epochs = run_epochs + prev_epoch + 1
 
@@ -86,12 +89,12 @@ if __name__ == '__main__':  # run it!
         prev_epoch += 1
         epoch = prev_epoch
 
-        generator = get_generator(model, filters, filter_size, dilation, layers, out_maps, grow_filters, 0, GPU, net)
-        sample, time_ge, sample_batch_size, n_samples = generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, conv_field, generator, bound_type, GPU, cuda, training_data, out_maps, boundary_layers, noise, den_var)  # generate samples
+        generator = get_generator(model, filters, filter_size, dilation, layers, out_maps, grow_filters, channels, 0, GPU, net)
+        sample, time_ge, sample_batch_size, n_samples = generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, conv_field, generator, bound_type, GPU, cuda, training_data, out_maps, boundary_layers, noise, den_var, channels, softmax_temperature)  # generate samples
 
         del generator
         if n_samples != 0:
-            save_ckpt(prev_epoch, net, optimizer, dir_name)
+            #save_ckpt(prev_epoch, net, optimizer, dir_name)
             print('Generated samples')
 
             output_analysis = analyse_samples(sample, training_data)
@@ -100,9 +103,11 @@ if __name__ == '__main__':  # run it!
             agreements = compute_accuracy(input_analysis, output_analysis, outpaint_ratio, training_data)
             total_agreement = 1
             for i, j, in enumerate(agreements.values()):
-                total_agreement *= float(j)
+                total_agreement += float(j)
 
-            if training_data == 9:
+            total_agreement /= len(agreements)
+
+            if (training_data == 10 or training_data == 9):
                 print('tot = {:.4f}; den={:.2f}; b_order={:.2f}; b_length={:.2f}; b_angle={:.2f}; corr={:.2f}; fourier={:.2f}; time_ge={:.1f}s'.format(total_agreement, agreements['density'], agreements['order'], agreements['bond'], agreements['angle'], agreements['correlation'], agreements['fourier'], time_ge))
             else:
                 print('tot = {:.4f}; den={:.2f}; en={:.2f}; corr={:.2f}; fourier={:.2f}; time_ge={:.1f}s'.format(total_agreement, agreements['density'], agreements['energy'], agreements['correlation'], agreements['fourier'], time_ge))
@@ -114,7 +119,7 @@ if __name__ == '__main__':  # run it!
         te_err_hist = []
         while (epoch <= (max_epochs + 1)) & (converged == 0):#for epoch in range(prev_epoch+1, max_epochs):  # over a certain number of epochs
 
-            training_batch, changed = get_training_batch_size(training_data, training_batch, model, filters, filter_size, layers, out_maps, grow_filters, dilation, den_var, GPU)  # confirm we can keep on at this batch size
+            training_batch, changed = get_training_batch_size(training_data, training_batch, model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var, GPU)  # confirm we can keep on at this batch size
             if changed == 1: # if the training batch is different, we have to adjust our batch sizes and dataloaders
                 tr, te = get_dataloaders(training_data, training_batch, out_maps)
                 print('Training batch set to {}'.format(training_batch))
@@ -127,20 +132,20 @@ if __name__ == '__main__':  # run it!
             te_err_hist.append(torch.mean(torch.stack(err_te)))
             print('epoch={}; nll_tr={:.5f}; nll_te={:.5f}; time_tr={:.1f}s; time_te={:.1f}s'.format(epoch, torch.mean(torch.stack(err_tr)), torch.mean(torch.stack(err_te)), time_tr, time_te))
 
-            average_over = 5
+            average_over = 10
             converged = auto_convergence(average_over, epoch, prev_epoch, net, optimizer, dir_name, tr_err_hist, te_err_hist, max_epochs)
 
             if converged == 1:  # if we are sampling
-                net, conv_field = get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, den_var)
+                net, conv_field = get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var)
                 optimizer = optim.Adam(net.parameters())#optim.SGD(net.parameters(),lr=1e-4, momentum=0.9, nesterov=True)#
                 net, optimizer, prev_epoch = load_checkpoint(net, optimizer, dir_name, GPU, prev_epoch)
                 if GPU == 1:
-                    net = nn.DataParallel(net)
+                    #net = nn.DataParallel(net)
                     net.to(torch.device("cuda:0"))
 
                 del tr, te
-                generator = get_generator(model, filters, filter_size, dilation, layers, out_maps, grow_filters, 0, GPU, net)
-                sample, time_ge, sample_batch_size, n_samples = generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, conv_field, generator, bound_type, GPU, cuda, training_data, out_maps, boundary_layers, noise, den_var)  # generate samples
+                generator = get_generator(model, filters, filter_size, dilation, layers, out_maps, grow_filters, channels, 0, GPU, net)
+                sample, time_ge, sample_batch_size, n_samples = generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, conv_field, generator, bound_type, GPU, cuda, training_data, out_maps, boundary_layers, noise, den_var, channels, softmax_temperature)  # generate samples
                 if n_samples != 0:
                     save_ckpt(prev_epoch, net, optimizer, dir_name)
                     print('Generated samples')
@@ -151,9 +156,11 @@ if __name__ == '__main__':  # run it!
                     agreements = compute_accuracy(input_analysis, output_analysis, outpaint_ratio, training_data)
                     total_agreement = 1
                     for i, j, in enumerate(agreements.values()):
-                        total_agreement *= float(j)
+                        total_agreement += float(j)
 
-                    if training_data == 9:
+                    total_agreement /= len(agreements)
+
+                    if (training_data == 10 or training_data == 9):
                         print('tot = {:.4f}; den={:.2f}; b_order={:.2f}; b_length={:.2f}; b_angle={:.2f}; corr={:.2f}; fourier={:.2f}; time_ge={:.1f}s'.format(total_agreement, agreements['density'], agreements['order'], agreements['bond'], agreements['angle'], agreements['correlation'], agreements['fourier'], time_ge))
                     else:
                         print('tot = {:.4f}; den={:.2f}; en={:.2f}; corr={:.2f}; fourier={:.2f}; time_ge={:.1f}s'.format(total_agreement, agreements['density'], agreements['energy'], agreements['correlation'], agreements['fourier'], time_ge))
@@ -166,7 +173,7 @@ if __name__ == '__main__':  # run it!
             epoch += 1
 
         tr, te = get_dataloaders(training_data, 4, out_maps)  # 1 - do the accuracy analysis
-        example = next(iter(te)).cuda()  # get seeds from test set
+        example = next(iter(tr)).cuda()  # get seeds from test set
         raw_out = net(example[0:2, :, :, :].float())
         raw_out = raw_out[0].unsqueeze(1)
         raw_grid = utils.make_grid(raw_out, nrow=int(out_maps), padding=0)
@@ -231,5 +238,28 @@ plt.imshow(outputs['density correlation'])
 plt.subplot(2,3,6)
 plt.plot(correlation)
 plt.plot(correlation_out)
+
+n_samples = 1
+maxrange = 5
+bins = np.arange(-maxrange, maxrange,2 * maxrange / 25)
+grid_in = np.expand_dims(sample[0,:,:,:].cpu().detach().numpy(),0)
+n_particles = np.sum(grid_in != 0)
+delta = bins[1]-bins[0]
+re_coords = []
+for n in range(n_samples):
+    re_coords.append([])
+
+for n in range(n_samples):
+    for i in range(grid_in.shape[-2]):
+        for j in range(grid_in.shape[-1]):
+            if grid_in[n,0,i,j] != 0:
+                re_coords[n].append((i - grid_in[n,0,i,j] * delta + maxrange, j - grid_in[n,1,i,j] * delta + maxrange))
+
+new_coords2 = np.zeros((n_samples,n_particles,2))
+for n in range(n_samples):
+    for m in range(len(re_coords[n])):
+        new_coords2[n,m,:] = re_coords[n][m] # the reconstructed coordinates
+        
+        
 
 '''

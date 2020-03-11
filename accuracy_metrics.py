@@ -192,8 +192,8 @@ def bond_analysis(images, max_range, particle):
         if len(bond_order) >= 1000:
             break
 
-        for i in range(images[n, :, :].shape[-2]):
-            for j in range(images[n, :, :].shape[-1]):
+        for i in range(max_bond_length, images[n, :, :].shape[-2] - max_bond_length):
+            for j in range(max_bond_length, images[n, :, :].shape[-1] - max_bond_length):
                 if images[n, i, j] == particle:  # if we find a particle
                     radius = []
                     neighborx = []
