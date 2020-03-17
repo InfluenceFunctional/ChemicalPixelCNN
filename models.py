@@ -150,13 +150,13 @@ class PixelCNN_RES(nn.Module):
         super(PixelCNN_RES, self).__init__()
 
         if padded == 1:
-            padding = 1
+            self.padding = 1
         else:
-            padding = 0
+            self.padding = 0
 
         self.initial_batch_norm = nn.BatchNorm2d(channels)#2 * filters)
-        self.initial_convolution = MaskedConv2d('A', channels, channels, 2*filters, filter_size, 1, (filter_size - 1) // 2, padding_mode='zeros', bias=True)
-        self.hidden_convolutions = nn.ModuleList([MaskedConv2d('B', channels, filters, filters, 3, 1, padding, padding_mode='zeros', bias=True) for i in range(layers)])
+        self.initial_convolution = MaskedConv2d('A', channels, channels, 2 * filters, filter_size, 1, self.padding * ((filter_size - 1) // 2), padding_mode='zeros', bias=True)
+        self.hidden_convolutions = nn.ModuleList([MaskedConv2d('B', channels, filters, filters, 3, 1, self.padding, padding_mode='zeros', bias=True) for i in range(layers)])
         self.shrink_features = nn.ModuleList([nn.Conv2d(2 * filters, filters, 1) for i in range(layers)])
         self.grow_features = nn.ModuleList([nn.Conv2d(filters, 2 * filters, 1) for i in range(layers)])
         self.batch_norms_1 = nn.ModuleList([nn.BatchNorm2d(2 * filters) for i in range(layers)])
@@ -173,7 +173,10 @@ class PixelCNN_RES(nn.Module):
             x = self.shrink_features[i](F.relu(self.batch_norms_1[i](x)))
             x = self.hidden_convolutions[i](F.relu(self.batch_norms_2[i](x)))
             x = self.grow_features[i](F.relu(self.batch_norms_3[i](x)))
-            x += residue
+            if self.padding == 0:
+                x += residue[:, :, 1:-1, 1:-1]  # contract input
+            else:
+                x += residue
 
         x = self.fc2(F.relu(self.fc1(x)))
         return x
@@ -194,7 +197,7 @@ class PixelCNN_RES_OUT(nn.Module):
         self.shrink_features = nn.ModuleList([nn.Conv2d(2 * filters, filters, 1) for i in range(layers)])
         self.grow_features = nn.ModuleList([nn.Conv2d(filters, 2 * filters, 1) for i in range(layers)])
         self.batch_norms_1 = nn.ModuleList([nn.BatchNorm2d(2 * filters) for i in range(layers)])
-        self.batch_norms_2 = nn.ModuleList([nn.BatchNorm2d(filters) for i in range(layers)])
+        self.batch_n1orms_2 = nn.ModuleList([nn.BatchNorm2d(filters) for i in range(layers)])
         self.batch_norms_3 = nn.ModuleList([nn.BatchNorm2d(filters) for i in range(layers)])
         self.fc1 = nn.Conv2d(2 * filters, 256, 1)
         self.fc2 = nn.Conv2d(256, out_maps * channels, 1)
@@ -214,13 +217,10 @@ class PixelCNN_RES_OUT(nn.Module):
 
 
 class PixelDRN(nn.Module):  # dilated residual network
-    def __init__(self, filters, initial_filter_size, dilation, layers, out_maps, grow_filters, padding):
+    def __init__(self, filters, initial_filter_size, dilation, layers, out_maps, padding):
         super(PixelDRN, self).__init__()
 
-        if grow_filters == 1:
-            growth_factor = 1  # the (exponential) rate at which filters grow from block to block
-        elif grow_filters == 0:
-            growth_factor = 0
+        growth_factor = 0
 
         bottleneck_factor = 2  # the grow/shrink ratio of our 1x1 convolutions)
         bottleneck_filters = [int(filters * 2 ** (torch.arange(7, dtype=torch.float32) * growth_factor)[i]) for i in range(7)]  # we will grow filters in blocks of resnet layers, maxing out in block D

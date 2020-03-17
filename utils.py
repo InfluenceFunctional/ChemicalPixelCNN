@@ -29,7 +29,7 @@ def get_input():
     return run
 
 class build_dataset(Dataset):
-    def __init__(self, training_data, out_maps):
+    def __init__(self, training_data, dataset_size):
         if training_data == 1:
             self.samples = np.load('data/repulsive_redo_configs2.npy', allow_pickle=True).astype('uint8')
             self.samples = np.expand_dims(self.samples, axis=1)
@@ -46,19 +46,20 @@ class build_dataset(Dataset):
         elif training_data == 5:
             self.samples = np.load('Augmented_Brain_Sample2.npy',allow_pickle=True).astype('uint8')
         elif training_data == 6:
-            self.samples = np.load('drying_sample_1.npy', allow_pickle=True)
+            self.samples = np.load('data/drying_sample_1.npy', allow_pickle=True)
         elif training_data == 7:
-            self.samples = np.load('drying_sample_-1.npy', allow_pickle=True)
+            self.samples = np.load('data/drying_sample_-1.npy', allow_pickle=True)
         elif training_data == 8:
-            self.samples = np.load('big_worm_results.npy', allow_pickle=True)
+            self.samples = np.load('data/big_worm_results.npy', allow_pickle=True)
         elif training_data == 9:
-            self.samples = np.load('data/MAC/big_MAC.npy',allow_pickle=True)
+            self.samples = np.load('data/MAC/big_dot_MAC.npy',allow_pickle=True)
         elif training_data == 10:
             self.samples = np.load('data/MAC/big_dot_graphene2.npy',allow_pickle=True)
         elif training_data == 11:
             self.samples = np.load('data/color_test3.npy',allow_pickle=True)
 
-        self.samples = np.array((self.samples[0:5000] + 1)/(out_maps - 1)) # normalize inputs on 0,1,2...
+        out_maps = len(np.unique(self.samples[0,:,:,:])) + 1
+        self.samples = np.array((self.samples[0:dataset_size] + 1)/(out_maps - 1)) # normalize inputs on 0,1,2...
 
     def __len__(self):
         return len(self.samples)
@@ -66,15 +67,15 @@ class build_dataset(Dataset):
     def __getitem__(self, idx):
         return self.samples[idx]
 
-def get_dir_name(model, training_data, filters, layers, dilation, grow_filters, filter_size, noise, den_var):
+def get_dir_name(model, training_data, filters, layers, filter_size, noise, den_var, dataset_size):
     if model == 3:
-        dir_name = "model=%d_dataset=%d_filters=%d_layers=%d_dilation=%d_grow_filters=%d_filter_size=%d_noise=%.1f_denvar=%.1f" % (model, training_data, filters, layers, dilation, grow_filters, filter_size, noise, den_var)  # directory where tensorboard logfiles will be saved
+        dir_name = "model=%d_dataset=%d_dataset_size=%d_filters=%d_layers=%d_filter_size=%d_noise=%.1f_denvar=%.1f" % (model, training_data, dataset_size, filters, layers, filter_size, noise, den_var)  # directory where tensorboard logfiles will be saved
     else:
-        dir_name = "model=%d_dataset=%d_filters=%d_layers=%d_filter_size=%d_noise=%.1f_denvar=%.1f" % (model, training_data, filters, layers, filter_size, noise, den_var)  # directory where tensorboard logfiles will be saved
+        dir_name = "model=%d_dataset=%d_dataset_size=%d_filters=%d_layers=%d_filter_size=%d_noise=%.1f_denvar=%.1f" % (model, training_data, dataset_size, filters, layers, filter_size, noise, den_var)  # directory where tensorboard logfiles will be saved
 
     return dir_name
 
-def get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var):
+def get_model(model, filters, filter_size, layers, out_maps, channels, den_var):
     if model == 1:
         net = PixelCNN(filters, filter_size, layers, out_maps, 1)  # 1 means convolutions will be padded
         conv_field = (filter_size - 1) * layers // 2  # range of convolutional receptive field for given model - for PixelCNN
@@ -82,13 +83,13 @@ def get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilat
         net = PixelCNN_RES(filters, filter_size, layers, out_maps, channels, 1)
         conv_field = layers + (filter_size - 1) // 2  # for PixelCNN_RES
     elif model == 3:
-        net = PixelDRN(filters, filter_size, dilation, layers, out_maps, grow_filters, 1)
+        net = PixelDRN(filters, filter_size, layers, out_maps, 1)
         conv_field = int(np.sum(net.block_dilation[1:])) * layers + (filter_size - 1) // 2  # conv field is equal to all the unpadding we will have to do for residuals in generation
     elif model == 4:
-        net = DensePixelDCNN(filters,filter_size,dilation,layers,out_maps, den_var == 0)
+        net = DensePixelDCNN(filters,filter_size,layers,out_maps, den_var == 0)
         conv_field = layers + (filter_size - 1) // 2
     elif model == 5:
-        net = PixelCNN2(filters,filter_size,dilation,layers,out_maps, den_var == 0) # gated, without blind spot
+        net = PixelCNN2(filters,filter_size,layers,out_maps, den_var == 0) # gated, without blind spot
         conv_field = int(np.sum(net.dilation[1:])) * layers + (filter_size - 1) // 2
 
     def init_weights(m):
@@ -101,8 +102,8 @@ def get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilat
     return net, conv_field
 
 
-def get_dataloaders(training_data, training_batch, out_maps):
-    dataset = build_dataset(training_data, out_maps)  # get data
+def get_dataloaders(training_data, training_batch, dataset_size):
+    dataset = build_dataset(training_data, dataset_size)  # get data
     train_size = int(0.8 * len(dataset))  # split data into training and test sets
     test_size = len(dataset) - train_size
     #train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])  # randomly split the data into training and test sets
@@ -113,11 +114,12 @@ def get_dataloaders(training_data, training_batch, out_maps):
     return tr, te
 
 
-def initialize_training(model, filters, filter_size, layers, out_maps, grow_filters, dilation, den_var, training_data, outpaint_ratio):
-    tr, te = get_dataloaders(training_data, 4, out_maps)
+def initialize_training(model, filters, filter_size, layers, den_var, training_data, outpaint_ratio, dataset_size):
+    tr, te = get_dataloaders(training_data, 4, dataset_size)
     sample_0 = next(iter(tr))
+    out_maps = len(np.unique(sample_0)) + 1
     channels = sample_0.shape[1]
-    net, conv_field = get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var)
+    net, conv_field = get_model(model, filters, filter_size, layers, out_maps, channels, den_var)
     optimizer = optim.Adam(net.parameters()) #optim.SGD(net.parameters(),lr=1e-4, momentum=0.9, nesterov=True)#
     input_x_dim, input_y_dim = sample_0.shape[-1], sample_0.shape[-2]  # set input and output dimensions
     sample_x_dim, sample_y_dim = int(input_x_dim * outpaint_ratio), int(input_y_dim * outpaint_ratio)
@@ -152,17 +154,17 @@ def load_checkpoint(net, optimizer, dir_name, GPU, prev_epoch):
     return net, optimizer, prev_epoch
 
 
-def get_training_batch_size(training_data, training_batch, model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var, GPU):
-    net, conv_field = get_model(model, filters, filter_size, layers, out_maps, grow_filters, dilation, channels, den_var)
+def get_training_batch_size(training_data, training_batch, model, filters, filter_size, layers, out_maps, channels, den_var, dataset_size, GPU):
+    net, conv_field = get_model(model, filters, filter_size, layers, out_maps, channels, den_var)
     if GPU == 1:
-        #net = nn.DataParallel(net)
+        net = nn.DataParallel(net)
         net.to(torch.device("cuda:0"))
 
     optimizer =  optim.Adam(net.parameters())
     finished = 0
     training_batch_0 = 1 * training_batch
     #  test various batch sizes to see what we can store in memory
-    test_dataset = build_dataset(training_data, out_maps)
+    test_dataset = build_dataset(training_data, dataset_size)
     while (training_batch > 1) & (finished == 0):
         try:
             net.train(True)
@@ -174,9 +176,6 @@ def get_training_batch_size(training_data, training_batch, model, filters, filte
             target = input.data * (out_maps - 1)  # switch from training to output space
             channels = target.shape[-3]
 
-            noise = 0
-            if den_var != 0:
-                input = random_padding(input, noise, den_var, conv_field, GPU)
             output = net(input.float())  # reshape output from flat filters to channels * filters per channel
             output = torch.reshape(output, (output.shape[0], out_maps, channels, output.shape[-2], output.shape[-1]))
 
@@ -204,11 +203,9 @@ def train_net(net, optimizer, writer, tr, epoch, out_maps, noise, den_var, conv_
 
         target = input.data * (out_maps - 1)  # switch from training to output space
         channels = target.shape[-3]
-        #if noise != 0:
-        input = scramble_images(input, 0.25, 1, GPU) # introduce uniform noise to training samples (second term controls magnitude)
 
-        if den_var !=0:
-            input = random_padding(input, noise, den_var, conv_field, GPU)
+        if noise != 0:
+            input = scramble_images(input, noise, den_var, GPU) # introduce uniform noise to training samples (second term controls magnitude), not setup for multi-channel
 
         output = net(input.float()) # reshape output from flat filters to channels * filters per channel
         output = torch.reshape(output, (output.shape[0], out_maps, channels, output.shape[-2], output.shape[-1]))
@@ -235,7 +232,7 @@ def test_net(net, writer, te, out_maps, noise, den_var, epoch, conv_field, GPU, 
 
     time_te = time.time()
     err_te = []
-    net.train(False)
+    net.eval() #train(False)
     with torch.no_grad():  # we're just computing the test set error so we won't be updating the gradients or weights
         for i, input in enumerate(te):
             if GPU == 1:
@@ -244,11 +241,9 @@ def test_net(net, writer, te, out_maps, noise, den_var, epoch, conv_field, GPU, 
             target = input.data * (out_maps - 1)  # switch from training to output space
             channels = target.shape[-3]
 
-            #if noise != 0:
-            input = scramble_images(input, 0.25, 1, GPU) #NOT SETUP FOR MULTI-CHANNEL
+            if noise != 0:
+                input = scramble_images(input, noise, den_var, GPU) #NOT SETUP FOR MULTI-CHANNEL
 
-            if den_var != 0:
-                input = random_padding(input, noise, den_var, conv_field, GPU)
             output = net(input.float())  # reshape output from flat filters to channels * filters per channel
             output = torch.reshape(output, (output.shape[0], out_maps, channels, output.shape[-2], output.shape[-1]))
 
@@ -264,11 +259,11 @@ def test_net(net, writer, te, out_maps, noise, den_var, epoch, conv_field, GPU, 
 
     return err_te, time_te
 
-def auto_convergence(average_over, epoch, prev_epoch, net, optimizer, dir_name, tr_err_hist, te_err_hist, max_epochs):
+def auto_convergence(train_margin, average_over, epoch, prev_epoch, net, optimizer, dir_name, tr_err_hist, te_err_hist, max_epochs):
     # set convergence criteria
     # if the test error has increased on average for the last x epochs
     # or if the training error has decreased by less than 1% for the last x epochs
-    train_margin = .00001  # relative change over past x runs
+    #train_margin = .000001  # relative change over past x runs
     # or if the training error is diverging from the test error by more than 20%
     test_margin = 10# 0.1
     # average_over - the time over which we will average loss in order to determine convergence
@@ -286,41 +281,54 @@ def auto_convergence(average_over, epoch, prev_epoch, net, optimizer, dir_name, 
         if (te_mean > te_err_hist[-average_over]) or (torch.abs((tr_mean - tr_err_hist[-average_over]) / tr_mean) < train_margin) or (((te_mean - tr_mean) / tr_mean) > test_margin) or ((epoch - prev_epoch) == max_epochs):
             converged = 1
             if os.path.exists('ckpts/'+dir_name[:]) & (epoch > 1) & (epoch-prev_epoch < average_over): #can't happen on first epoch
-                print('Previously converged this result at epoch {}!'.format(epoch - average_over -1))
+                print('Previously converged this result at epoch {}!'.format(epoch - 1))
             else:
                 if os.path.exists('ckpts/'+dir_name[:]):
                     os.remove('ckpts/'+dir_name[:])
-                os.rename('ckpts/'+dir_name[:]+'_ckpt_-{}'.format(average_over - 1), 'ckpts/'+dir_name[:])  # save the -average_over epoch as the final output
-                print('Learning converged at epoch {}'.format(epoch - average_over + 1))  # print a nice message  # consider also using an accuracy metric
+                os.rename('ckpts/'+dir_name[:]+'_ckpt_-{}'.format(0), 'ckpts/'+dir_name[:])  # save the final epoch as the final output
+                print('Learning converged at epoch {}'.format(epoch))  # print a nice message  # consider also using an accuracy metric
 
     return converged
 
 
-def get_generator(model, filters, filter_size, dilation, layers, out_maps, grow_filters, channels, padding, GPU, net):
+def get_generator(model, filters, filter_size, layers, out_maps, channels, padding, GPU, net):
     if model == 1:
         generator = PixelCNN(filters, filter_size, layers, out_maps, channels, padding)  # 0 means no padding
     elif model == 2:
-        generator = PixelCNN_RES_OUT(filters, filter_size, layers, out_maps, channels, padding)
+        #generator = PixelCNN_RES(filters, filter_size, layers, out_maps, channels, padding)
+        # new way to initialize generator
+        net.padding = 0
+        try:
+            net.initial_convolution.padding=(0,0)
+            for i in range(len(net.hidden_convolutions)):
+                net.hidden_convolutions[i].padding=(0,0)
+        except:
+            net.module.initial_convolution.padding = (0, 0)
+            for i in range(len(net.module.hidden_convolutions)):
+                net.module.hidden_convolutions[i].padding = (0, 0)
+
+            net.module.padding = 0
     elif model == 3:
-        generator = PixelDRN(filters, filter_size, dilation, layers, out_maps, grow_filters, padding)
+        generator = PixelDRN(filters, filter_size, layers, out_maps, padding)
     elif model == 4:
-        generator = DensePixelDCNN(filters, filter_size, dilation, layers, out_maps, padding)
+        generator = DensePixelDCNN(filters, filter_size, layers, out_maps, padding)
     elif model == 5:
-        generator = PixelCNN2(filters,filter_size,dilation,layers, out_maps, padding) # gated, without blind spot
-
-    if GPU == 1:
-        #generator = nn.DataParallel(generator)
-        generator.to(torch.device("cuda:0"))
-
-    generator.load_state_dict(net.state_dict())
-
-    return generator
+        generator = PixelCNN2(filters,filter_size, layers, out_maps, padding) # gated, without blind spot
 
 
-def build_boundary(sample_batch, sample_batch_size, training_data, conv_field, generator, bound_type, out_maps, noise, den_var, GPU): # 0 = empty, 1 = seed in top left only, 2 = seed + random noise with appropriate density, 3 = seed + generated
+    if model != 2:
+        if GPU == 1:
+            generator = nn.DataParallel(generator) # multi-GPU training
+            generator.to(torch.device("cuda:0"))
+        generator.load_state_dict(net.state_dict())
+
+    return net
+
+
+def build_boundary(sample_batch, sample_batch_size, training_data, conv_field, generator, bound_type, out_maps, noise, den_var, dataset_size, GPU): # 0 = empty, 1 = seed in top left only, 2 = seed + random noise with appropriate density, 3 = seed + generated
 
     if bound_type > 0:  # requires samples are at least as large as the convolutional receptive field, and
-        tr, te = get_dataloaders(training_data, int(sample_batch_size/.2), out_maps) # requires a sufficiently large training set or we won't saturate the seeds
+        tr, te = get_dataloaders(training_data, int(sample_batch_size/.2), dataset_size) # requires a sufficiently large training set or we won't saturate the seeds
         seeds = next(iter(tr))  # get seeds from training set
 
         if (bound_type == 1) or (bound_type == 3):
@@ -382,7 +390,10 @@ def build_boundary(sample_batch, sample_batch_size, training_data, conv_field, g
 
         sample_batch[:, :, 0:conv_field, seeds.shape[3]:] = bound1[:, :, 0:conv_field, seeds.shape[3]:]  # assign bounds
         sample_batch[:, :, seeds.shape[2]:, 0:conv_field] = bound2[:, :, seeds.shape[2]:, 0:conv_field]
-
+    elif bound_type == 5: # perfect graphene seeds of size up to 1400
+        seeds = (torch.Tensor(np.load('data/MAC/big_perfect_graphene.npy',allow_pickle=True)) + 1)/(out_maps - 1) # get seeds from training set
+        sample_batch[:, :, 0:seeds.shape[2], 0:seeds.shape[3]] = seeds[0:sample_batch_size, :, 0:np.amin((seeds.shape[2], sample_batch.shape[2])), 0:np.amin((seeds.shape[3], sample_batch.shape[3]))]  # seed from the top-left
+        sample_batch[:, :, 0:seeds.shape[2], 0:seeds.shape[3]] = seeds[0:sample_batch_size, :, 0:np.amin((seeds.shape[2], sample_batch.shape[2])), 0:np.amin((seeds.shape[3], sample_batch.shape[3]))]  # seed from the top-left
 
     return sample_batch
 
@@ -402,9 +413,9 @@ def get_sample_batch_size(sample_batch_size, generator, sample_x_dim, sample_y_d
         except RuntimeError:  # if we get an OOM, try again with smaller batch
             sample_batch_size = sample_batch_size // 2
 
-    return sample_batch_size, int(sample_batch_size != sample_batch_size_0)
+    return int(sample_batch_size * 0.8), int(sample_batch_size != sample_batch_size_0)
 
-def generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, conv_field, generator, bound_type, GPU, cuda, training_data, out_maps, boundary_layers, noise, den_var, channels, temperature):
+def generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, conv_field, generator, bound_type, GPU, cuda, training_data, out_maps, boundary_layers, noise, den_var, channels, temperature, dataset_size):
     if GPU == 1:
         cuda.synchronize()
     time_ge = time.time()
@@ -430,23 +441,23 @@ def generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, c
         sample_batch.fill_(0)  # initialize with minimum value
 
         if bound_type > 0:
-            sample_batch = build_boundary(sample_batch, sample_batch_size, training_data, conv_field, generator, bound_type, out_maps, noise, den_var, GPU)
+            sample_batch = build_boundary(sample_batch, sample_batch_size, training_data, conv_field, generator, bound_type, out_maps, noise, den_var, dataset_size, GPU)
 
         if GPU == 1:
             sample_batch = sample_batch.cuda()
 
-        generator.train(False)
+        #generator.train(False)
+        generator.eval()
         with torch.no_grad():  # we will not be updating weights
-                for i in tqdm.tqdm(range(conv_field, sample_y_padded + conv_field)):  # for each pixel
-                    for j in range(conv_field, sample_x_padded + conv_field):
-                        for k in range(channels):
-                            out = generator(sample_batch[:, :, i - conv_field:i + conv_field + 1, j - conv_field:j + conv_field + 1].float())  # query the network about only area within the receptive field
-                            out = torch.reshape(out, (out.shape[0], out_maps, channels, out.shape[-2], out.shape[-1])) # reshape to select channels
-                            normed_temp = torch.mean(torch.abs(out[:, 1:, k, 0, 0])) * (temperature)# + np.exp(- i/conv_field)) # normalize temperature, graded against the boundary
-
-                            probs = F.softmax(out[:, 1:, k, 0, 0]/normed_temp, dim=1).data # the remove the lowest element (boundary)
-                            sample_batch[:, k, i, j] = (torch.multinomial(probs, 1).float() + 1).squeeze(1) / (out_maps -1)  # convert output back to training space
-                            del out, probs
+            for i in tqdm.tqdm(range(conv_field, sample_y_padded + conv_field)):  # for each pixel
+                for j in range(conv_field, sample_x_padded + conv_field):
+                    for k in range(channels):
+                        out = generator(sample_batch[:, :, i - conv_field:i + conv_field + 1, j - conv_field:j + conv_field + 1].float())  # query the network about only area within the receptive field
+                        out = torch.reshape(out, (out.shape[0], out_maps, channels, out.shape[-2], out.shape[-1])) # reshape to select channels
+                        normed_temp = torch.mean(torch.abs(out[:, 1:, k, 0, 0])) * (temperature)# + np.exp(- i/conv_field/2)) # normalize temperature, graded against the boundary
+                        probs = F.softmax(out[:, 1:, k, 0, 0]/normed_temp, dim=1).data # the remove the lowest element (boundary)
+                        sample_batch[:, k, i, j] = (torch.multinomial(probs, 1).float() + 1).squeeze(1) / (out_maps -1)  # convert output back to training space
+                        del out, probs
 
         for k in range(channels):
             sample[batch * sample_batch_size:(batch + 1) * sample_batch_size, k, :, :] = sample_batch[:, k, (boundary_layers + 1) * conv_field:-conv_field, (boundary_layers + 1) * conv_field:-((boundary_layers + 1) * conv_field)] * (out_maps - 1) - 1  # convert back to input space
@@ -457,8 +468,34 @@ def generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, c
 
     return sample, time_ge, sample_batch_size, n_samples
 
-def analyse_inputs(training_data, out_maps, GPU):
-    dataset = torch.Tensor(build_dataset(training_data, out_maps))[:,0,:,:].unsqueeze(1)  # get data
+def generation(dir_name, input_x_dim, input_analysis, outpaint_ratio, epoch, model, filters, filter_size, layers, net, writer, te, out_maps, noise, den_var, conv_field, sample_x_dim, sample_y_dim, n_samples, sample_batch_size, bound_type, training_data, boundary_layers, channels, softmax_temperature, dataset_size, GPU, cuda, TB):
+    err_te, time_te = test_net(net, writer, te, out_maps, noise, den_var, epoch, conv_field, GPU, cuda)  # clean run net
+
+    net = get_generator(model, filters, filter_size, layers, out_maps, channels, 0, GPU, net)
+    sample, time_ge, sample_batch_size, n_samples = generate_samples(n_samples, sample_batch_size, sample_x_dim, sample_y_dim, conv_field, net, bound_type, GPU, cuda, training_data, out_maps, boundary_layers, noise, den_var, channels, softmax_temperature, dataset_size)  # generate samples
+    np.save('samples/' + dir_name[:], sample)
+    if n_samples != 0:
+        print('Generated samples')
+
+        output_analysis = analyse_samples(sample, training_data)
+        save_outputs(dir_name, n_samples, layers, filters, bound_type, input_x_dim, noise, den_var, filter_size, sample, epoch, TB)
+
+        agreements = compute_accuracy(input_analysis, output_analysis, outpaint_ratio, training_data)
+        total_agreement = 0
+        for i, j, in enumerate(agreements.values()):
+            total_agreement += float(j)
+
+        total_agreement /= len(agreements)
+
+        if (training_data == 10 or training_data == 9):
+            print('tot = {:.4f}; den={:.2f}; b_order={:.2f}; b_length={:.2f}; b_angle={:.2f}; corr={:.2f}; fourier={:.2f}; time_ge={:.1f}s'.format(total_agreement, agreements['density'], agreements['order'], agreements['bond'], agreements['angle'], agreements['correlation'], agreements['fourier'], time_ge))
+        else:
+            print('tot = {:.4f}; den={:.2f}; en={:.2f}; corr={:.2f}; fourier={:.2f}; time_ge={:.1f}s'.format(total_agreement, agreements['density'], agreements['energy'], agreements['correlation'], agreements['fourier'], time_ge))
+
+    return sample, time_ge, n_samples, agreements, output_analysis
+
+def analyse_inputs(training_data, out_maps, dataset_size):
+    dataset = torch.Tensor(build_dataset(training_data, dataset_size))[:,0,:,:].unsqueeze(1)  # get data
     dataset = dataset * (out_maps - 1) - 1
     #avg_density, en_dist, correlation2d, radial_correlation, fourier2d, radial_fourier, sum, variance,  = sample_analysis(dataset)
     input_analysis = analyse_samples(dataset, training_data)
@@ -468,18 +505,19 @@ def analyse_inputs(training_data, out_maps, GPU):
 def analyse_samples(sample, training_data):
     # considering the highest value in the dist to be that for particles
     sample = sample[:,0,:,:].unsqueeze(1) # for now only analyze the first dimension
-    particles = 1
-    avg_density = torch.mean((sample==particles).type(torch.float32)) # for A
-    sum = torch.sum(sample[:,0,:,:]==particles,0)
+    particles = int(torch.max(sample))
+    sample = sample==particles
+    avg_density = torch.mean((sample).type(torch.float32)) # for A
+    sum = torch.sum(sample[:,0,:,:],0)
     variance = torch.var(sum/torch.mean(sum + 1e-5))
-    correlation2d, radial_correlation, correlation_bins = spatial_correlation(sample==particles)
-    fourier2d = fourier_analysis(torch.Tensor((sample==particles).float()))
+    correlation2d, radial_correlation, correlation_bins = spatial_correlation(sample)
+    fourier2d = fourier_analysis(torch.Tensor((sample).float()))
     fourier_bins, radial_fourier = radial_fourier_analysis(fourier2d)
 
     if (training_data == 10 or training_data == 9):
         avg_bond_order, bond_order_dist, avg_bond_length, avg_bond_angle, bond_length_dist, bond_angle_dist = bond_analysis(sample, 1.7, particles)
     else:
-        avg_interactions, en_dist = compute_interactions(sample == particles)
+        avg_interactions, en_dist = compute_interactions(sample)
 
     sample_analysis = {}
     sample_analysis['density'] = avg_density
@@ -549,7 +587,7 @@ def write_inputs(layers, filters, max_epochs, n_samples, filter_size, writer):
     writer.add_text('filter size', '%d' % filter_size)
 
 
-def save_outputs(dir_name, n_samples, layers, filters, dilation, bound_type, input_x_dim, noise, den_var, filter_size, sample, epoch, TB):
+def save_outputs(dir_name, n_samples, layers, filters, bound_type, input_x_dim, noise, den_var, filter_size, sample, epoch, TB):
     # save to file
     output = {}
     output['n_samples'] = n_samples
@@ -557,7 +595,6 @@ def save_outputs(dir_name, n_samples, layers, filters, dilation, bound_type, inp
     output['filters'] = filters
     output['first layer filter size'] = filter_size
     output['epoch'] = epoch
-    output['dilation'] = dilation
     output['bound type'] = bound_type
     output['input size'] = input_x_dim
     output['noise mean'] = noise

@@ -106,7 +106,8 @@ def spatial_correlation(image_set):
     xdim = int(image_set.shape[-1]//2)
     ydim = int(image_set.shape[-2]//2)
 
-    n_samples = np.max((len(image_set), 2000))
+    density = np.average(image_set)
+    n_samples = np.max((len(image_set), 1000)).astype(int) # divide by density so that we actually get the correct number of filled samples
 
     samples = np.zeros((n_samples//image_set.shape[0]*image_set.shape[0], 1, ydim, xdim))
     for i in range(image_set.shape[0]):
@@ -176,6 +177,7 @@ def spatial_correlation(image_set):
 
 
 def bond_analysis(images, max_range, particle):
+    particle = 1
     images = images[:,0,:,:]
     max_bond_length = int(max_range / 0.2)  # avg bond length is about 1.5A, grid is about 0.2 A
 

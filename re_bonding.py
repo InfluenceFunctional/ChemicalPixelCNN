@@ -4,7 +4,8 @@ from skimage.draw import line_aa, line
 
 # import npy structures
 #images = np.load('data/MAC/big_MAC.npy', allow_pickle=True)
-images = np.load('data/MAC/noisey_graphene.npy', allow_pickle=True)
+#images = np.load('data/MAC/noisey_graphene.npy', allow_pickle=True)
+images = np.load('a_result.npy',allow_pickle=True) == 3
 images = images[:,0,:,:]
 #images = np.load('sample1.npy',allow_pickle=True)
 #images = np.load('trial_run.npy',allow_pickle=True)
